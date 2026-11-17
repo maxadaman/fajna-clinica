@@ -1,0 +1,117 @@
+{
+  "application_credentials": {
+    "description": "Google Calendar needs your own OAuth client. In a [Google Cloud project]({oauth_creds_url}) enable the [Google Calendar API]({calendar_api_url}), set up the [consent screen]({oauth_consent_url}), and create an OAuth client of type *Web application* with the redirect URI `https://my.home-assistant.io/redirect/oauth`. Enter its client ID and secret here."
+  },
+  "config": {
+    "step": {
+      "user": {
+        "title": "Fajna Clinic",
+        "menu_options": {
+          "account": "Add a patient account",
+          "google": "Connect Google Calendar"
+        }
+      },
+      "account": {
+        "title": "Fajna Clinic account",
+        "description": "Enter the phone number of the patient account. The clinic will text you a code.",
+        "data": { "phone": "Phone number" },
+        "data_description": { "phone": "As in the patient account, e.g. +380 99 123 45 67" }
+      },
+      "pin": {
+        "title": "Code from SMS",
+        "description": "Enter the code the clinic texted to {phone}.",
+        "data": { "pin": "Code" }
+      },
+      "password": {
+        "title": "Password",
+        "description": "Enter the patient account password. It is sent to the clinic once and not stored.",
+        "data": { "password": "Password" }
+      },
+      "reauth_confirm": {
+        "title": "Sign in again",
+        "description": "The clinic has ended the session of {phone}. Continue to receive a new SMS code."
+      },
+      "pick_implementation": {
+        "title": "Choose the Google credentials"
+      },
+      "google_settings": {
+        "title": "Google Calendar",
+        "description": "Every booked visit of every account becomes an event in this calendar, titled like «[Іван] Масаж спини». The people below are invited to each one without an email, so it shows in their calendars too.",
+        "data": {
+          "calendar_id": "Calendar",
+          "attendees": "Invite"
+        },
+        "data_description": {
+          "calendar_id": "«primary» is the main calendar of the linked account; another calendar's ID is in its Google settings.",
+          "attendees": "Email addresses, separated by commas."
+        }
+      },
+      "reauth_google": {
+        "title": "Link Google again",
+        "description": "Google no longer accepts the link. Sign in with the same Google account."
+      }
+    },
+    "error": {
+      "invalid_phone": "The clinic did not accept this phone number.",
+      "invalid_pin": "Wrong code. Check the SMS and try again.",
+      "invalid_password": "Wrong password.",
+      "invalid_email": "One of the addresses is not an email address.",
+      "cannot_connect": "Could not reach fajna.clinic.",
+      "unknown": "Unexpected answer from fajna.clinic. The site may have changed."
+    },
+    "abort": {
+      "already_configured": "This is already added.",
+      "reauth_successful": "Signed in again.",
+      "unsupported_login": "The clinic's login has changed and this version cannot complete it.",
+      "google_already_configured": "Google Calendar is already connected. Change its calendar or invitees in its options.",
+      "wrong_google_account": "That is a different Google account from the one linked.",
+      "missing_credentials": "Add Google credentials first: Settings → Application credentials.",
+      "missing_configuration": "Add Google credentials first: Settings → Application credentials.",
+      "oauth_error": "Google returned an unexpected answer.",
+      "oauth_failed": "Could not get a token from Google.",
+      "oauth_timeout": "Google did not answer in time.",
+      "oauth_unauthorized": "Google refused the credentials.",
+      "oauth_implementation_unavailable": "The Google credentials are not available right now.",
+      "authorize_url_timeout": "Timed out creating the Google sign-in link.",
+      "no_url_available": "Home Assistant has no URL Google could return to. Check Settings → Network.",
+      "user_rejected_authorize": "Access to Google was not granted."
+    },
+    "create_entry": {
+      "default": "Connected."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Google Calendar",
+        "data": {
+          "calendar_id": "Calendar",
+          "attendees": "Invite"
+        },
+        "data_description": {
+          "calendar_id": "«primary» is the main calendar of the linked account.",
+          "attendees": "Email addresses, separated by commas."
+        }
+      }
+    },
+    "error": {
+      "invalid_email": "One of the addresses is not an email address."
+    }
+  },
+  "entity": {
+    "calendar": {
+      "visits": { "name": "Visits" }
+    },
+    "sensor": {
+      "next_visit": {
+        "name": "Next visit",
+        "state_attributes": {
+          "service": { "name": "Service" },
+          "doctor": { "name": "Doctor" },
+          "instructions": { "name": "Instructions" }
+        }
+      },
+      "upcoming_visits": { "name": "Upcoming visits" }
+    }
+  }
+}

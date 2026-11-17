@@ -1,0 +1,117 @@
+{
+  "application_credentials": {
+    "description": "Для Google Calendar потрібен ваш власний OAuth-клієнт. У [проєкті Google Cloud]({oauth_creds_url}) увімкніть [Google Calendar API]({calendar_api_url}), налаштуйте [екран згоди]({oauth_consent_url}) і створіть OAuth-клієнт типу *Web application* з redirect URI `https://my.home-assistant.io/redirect/oauth`. Введіть тут його client ID і secret."
+  },
+  "config": {
+    "step": {
+      "user": {
+        "title": "Файна Клініка",
+        "menu_options": {
+          "account": "Додати кабінет пацієнта",
+          "google": "Підключити Google Calendar"
+        }
+      },
+      "account": {
+        "title": "Кабінет Файної Клініки",
+        "description": "Введіть номер телефону кабінету пацієнта. Клініка надішле код в SMS.",
+        "data": { "phone": "Номер телефону" },
+        "data_description": { "phone": "Як у кабінеті пацієнта, наприклад +380 99 123 45 67" }
+      },
+      "pin": {
+        "title": "Код з SMS",
+        "description": "Введіть код, який клініка надіслала на {phone}.",
+        "data": { "pin": "Код" }
+      },
+      "password": {
+        "title": "Пароль",
+        "description": "Введіть пароль кабінету пацієнта. Він надсилається клініці один раз і не зберігається.",
+        "data": { "password": "Пароль" }
+      },
+      "reauth_confirm": {
+        "title": "Увійти знову",
+        "description": "Клініка завершила сесію {phone}. Продовжте, щоб отримати новий код в SMS."
+      },
+      "pick_implementation": {
+        "title": "Оберіть облікові дані Google"
+      },
+      "google_settings": {
+        "title": "Google Calendar",
+        "description": "Кожен запланований візит з усіх кабінетів стане подією в цьому календарі з назвою на кшталт «[Іван] Масаж спини». Люди нижче запрошуються на кожну подію без листа на пошту, тож вона з'являється і в їхніх календарях.",
+        "data": {
+          "calendar_id": "Календар",
+          "attendees": "Запросити"
+        },
+        "data_description": {
+          "calendar_id": "«primary» — основний календар підключеного акаунта; ID іншого календаря є в його налаштуваннях Google.",
+          "attendees": "Адреси пошти через кому."
+        }
+      },
+      "reauth_google": {
+        "title": "Підключити Google знову",
+        "description": "Google більше не приймає підключення. Увійдіть тим самим акаунтом Google."
+      }
+    },
+    "error": {
+      "invalid_phone": "Клініка не прийняла цей номер.",
+      "invalid_pin": "Невірний код. Перевірте SMS і спробуйте ще раз.",
+      "invalid_password": "Невірний пароль.",
+      "invalid_email": "Одна з адрес — не адреса пошти.",
+      "cannot_connect": "Не вдалося з'єднатися з fajna.clinic.",
+      "unknown": "Неочікувана відповідь fajna.clinic. Можливо, сайт змінився."
+    },
+    "abort": {
+      "already_configured": "Це вже додано.",
+      "reauth_successful": "Вхід виконано знову.",
+      "unsupported_login": "Вхід на сайті клініки змінився, і ця версія не може його пройти.",
+      "google_already_configured": "Google Calendar уже підключено. Календар і запрошених можна змінити в його налаштуваннях.",
+      "wrong_google_account": "Це інший акаунт Google, не той, що був підключений.",
+      "missing_credentials": "Спершу додайте облікові дані Google: Налаштування → Облікові дані застосунків.",
+      "missing_configuration": "Спершу додайте облікові дані Google: Налаштування → Облікові дані застосунків.",
+      "oauth_error": "Google повернув неочікувану відповідь.",
+      "oauth_failed": "Не вдалося отримати токен від Google.",
+      "oauth_timeout": "Google не відповів вчасно.",
+      "oauth_unauthorized": "Google відхилив облікові дані.",
+      "oauth_implementation_unavailable": "Облікові дані Google зараз недоступні.",
+      "authorize_url_timeout": "Не вдалося вчасно створити посилання для входу в Google.",
+      "no_url_available": "У Home Assistant немає адреси, на яку Google міг би повернути. Перевірте Налаштування → Мережа.",
+      "user_rejected_authorize": "Доступ до Google не надано."
+    },
+    "create_entry": {
+      "default": "Підключено."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Google Calendar",
+        "data": {
+          "calendar_id": "Календар",
+          "attendees": "Запросити"
+        },
+        "data_description": {
+          "calendar_id": "«primary» — основний календар підключеного акаунта.",
+          "attendees": "Адреси пошти через кому."
+        }
+      }
+    },
+    "error": {
+      "invalid_email": "Одна з адрес — не адреса пошти."
+    }
+  },
+  "entity": {
+    "calendar": {
+      "visits": { "name": "Візити" }
+    },
+    "sensor": {
+      "next_visit": {
+        "name": "Наступний візит",
+        "state_attributes": {
+          "service": { "name": "Послуга" },
+          "doctor": { "name": "Лікар" },
+          "instructions": { "name": "Інструкції" }
+        }
+      },
+      "upcoming_visits": { "name": "Заплановані візити" }
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "domain": "fajna_clinic",
+  "name": "Fajna Clinic",
+  "codeowners": ["@maxadaman"],
+  "config_flow": true,
+  "dependencies": [
+    "application_credentials"
+  ],
+  "documentation": "https://github.com/maxadaman/fajna-clinica",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/maxadaman/fajna-clinica/issues",
+  "loggers": [
+    "custom_components.fajna_clinic"
+  ],
+  "requirements": [
+    "beautifulsoup4>=4.12"
+  ],
+  "version": "0.2.0"
+}
