@@ -41,11 +41,18 @@ The account is read every 30 minutes.
 
 ## Google Calendar
 
-Every booked visit of every account becomes an event in one Google Calendar, titled
-`[Іван] Масаж спини` — the patient's first name, from the card, then the service. The
-people you list are invited to each event **without an email**, so it shows in their
-calendars as well. The event is one: a reschedule or a cancellation reaches everybody's
-calendar at once.
+Each patient can have a Google Calendar of their own: link one Google account per person,
+and tick whose cards it holds (a parent's calendar can hold a child's visits too). A card
+is in one calendar at most, so no visit is written twice. Every booked visit becomes an
+event titled `[Іван] Масаж спини` — the patient's first name, from the card, then the
+service. The people you list are invited to each event **without an email**, so it shows
+in their calendars as well. The event is one: a reschedule or a cancellation reaches
+everybody's calendar at once.
+
+- **Linked guests accept at once.** When a guest has linked their own Google account here
+  too, the integration accepts the invitation for them, in their main calendar: Valeria's
+  massage with you invited shows in your calendar as *going*. An invitation the guest has
+  answered themselves (declined, say) is left as they answered it.
 
 - **Kept in step every 30 minutes.** A new visit adds an event, a changed one updates it, a
   visit cancelled before it starts removes it. A visit that took place keeps its event.
@@ -65,10 +72,16 @@ calendar at once.
    week. A published app that is not verified only shows an «unverified app» warning to you.
 3. Home Assistant → Settings → Devices & services → Add integration → **Fajna Clinic** →
    **Connect Google Calendar**. Enter the client ID and secret when asked, sign in with the
-   Google account whose calendar should hold the visits, then choose the calendar
-   (`primary` is its main one) and whom to invite.
+   Google account whose calendar should hold the visits, then tick the patient cards, choose
+   the calendar (`primary` is its main one) and whom to invite. Add the patient account
+   first: the cards come from it.
+4. Repeat step 3 for every person with a calendar of their own, signing in with their
+   Google account. The same OAuth client serves them all.
 
-The calendar and the invitees can be changed later in the entry's options.
+The cards, the calendar and the invitees can be changed later in the entry's options.
+
+A Google link made before 0.4 holds every card, as it did. To give someone a calendar of
+their own, first untick their card in that link's options.
 
 ## Development
 

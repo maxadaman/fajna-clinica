@@ -44,12 +44,14 @@
       "pick_implementation": { "title": "Choose the Google credentials" },
       "google_settings": {
         "title": "Google Calendar",
-        "description": "Every booked visit of every account becomes an event in this calendar, titled like «[Іван] Масаж спини». The people below are invited to each one without an email, so it shows in their calendars too.",
+        "description": "Visits of the cards ticked below become events in this calendar, titled like «[Іван] Масаж спини». The people below are invited to each one without an email, so it shows in their calendars too. An invitee who has linked their own Google account here has the invitation accepted for them.",
         "data": {
+          "cards": "Patient cards",
           "calendar_id": "Calendar",
           "attendees": "Invite"
         },
         "data_description": {
+          "cards": "Whose visits this calendar holds. A card already in another linked calendar is not offered.",
           "calendar_id": "«primary» is the main calendar of the linked account; another calendar's ID is in its Google settings.",
           "attendees": "Email addresses, separated by commas."
         }
@@ -73,7 +75,8 @@
       "reauth_successful": "Signed in again.",
       "unsupported_login": "The clinic's login has changed and this version cannot complete it.",
       "no_persons": "The account has no patient cards.",
-      "google_already_configured": "Google Calendar is already connected. Change its calendar or invitees in its options.",
+      "add_account_first": "Add a patient account first: the calendar holds its patient cards' visits.",
+      "no_free_cards": "Every patient card already has a calendar. To give a card a calendar of its own, untick it in the options of the Google link that holds it.",
       "wrong_google_account": "That is a different Google account from the one linked.",
       "missing_credentials": "Add Google credentials first: Settings → Application credentials.",
       "missing_configuration": "Add Google credentials first: Settings → Application credentials.",
@@ -92,11 +95,14 @@
     "step": {
       "init": {
         "title": "Google Calendar",
+        "description": "Visits of the ticked cards are written to this calendar. Untick a card to remove its events from here.",
         "data": {
+          "cards": "Patient cards",
           "calendar_id": "Calendar",
           "attendees": "Invite"
         },
         "data_description": {
+          "cards": "Whose visits this calendar holds. A card already in another linked calendar is not offered.",
           "calendar_id": "«primary» is the main calendar of the linked account.",
           "attendees": "Email addresses, separated by commas."
         }

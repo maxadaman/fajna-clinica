@@ -1,8 +1,14 @@
-"""Booked visits, kept in step with a Google Calendar.
+"""Booked visits, kept in step with Google Calendar.
 
-One event per visit, in one calendar, with the attendees invited to it: Google shows it in
-their calendars as well, and a change or a cancellation reaches all of them at once.
-Invitations are sent without email (`sendUpdates=none`).
+Each linked Google account holds the visits of the patient cards chosen for it (an entry
+from before the choice holds every card). One event per visit, in that calendar, with the
+attendees invited to it: Google shows it in their calendars as well, and a change or a
+cancellation reaches all of them at once. Invitations are sent without email
+(`sendUpdates=none`).
+
+An attendee who has linked their own Google account here answers the invitation at once:
+the integration accepts it on their behalf, in their main calendar, unless they have
+answered it themselves.
 
 Each event carries the visit's id and its account in private extended properties. That,
 not a local list, is what says which events are ours — so nothing is created twice, even
@@ -31,6 +37,8 @@ from .models import AccountData, PlannedVisit
 _LOGGER = logging.getLogger(__name__)
 
 _API = "https://www.googleapis.com/calendar/v3/calendars/{calendar}/events"
+# Invitations land in the attendee's main calendar, whichever one their visits go to.
+_INVITES = _API.format(calendar="primary")
 _PROP_UID = "fajna_uid"
 _PROP_ACCOUNT = "fajna_account"
 # Without email: the event simply appears in the attendees' calendars.
@@ -44,6 +52,11 @@ class GoogleApiError(Exception):
 
 
 # --------------------------------------------------------------------------- pure
+
+
+def person_key(account: str, person: str) -> str:
+    """A card across every account: the account's phone and the card's full name."""
+    return f"{account}:{person}"
 
 
 def first_name(full_name: str) -> str:
@@ -94,6 +107,9 @@ class Plan:
     insert: list[dict[str, Any]] = field(default_factory=list)
     update: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     delete: list[str] = field(default_factory=list)
+    # The account's events in the calendar, as Google answered them (with the attendees'
+    # answers): the ones left as they are; a sync adds the ones it wrote.
+    current: list[dict[str, Any]] = field(default_factory=list)
 
     def __bool__(self) -> bool:
         return bool(self.insert or self.update or self.delete)
@@ -122,6 +138,8 @@ def plan_sync(
         seen.add(uid)
         if _differs(event, body):
             plan.update.append((event["id"], body))
+        else:
+            plan.current.append(dict(event))
     plan.insert = [body for uid, body in wanted.items() if uid not in seen]
     return plan
 
@@ -161,44 +179,85 @@ class GoogleCalendarApi:
                 return events
             params["pageToken"] = token
 
-    async def insert(self, body: dict[str, Any]) -> None:
-        await self._call("POST", self._url, params=_QUIET, json=body)
+    async def insert(self, body: dict[str, Any]) -> dict[str, Any]:
+        return await self._call("POST", self._url, params=_QUIET, json=body) or {}
 
-    async def update(self, event_id: str, body: dict[str, Any]) -> None:
-        await self._call("PATCH", f"{self._url}/{quote(event_id)}", params=_QUIET, json=body)
+    async def update(self, event_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        url = f"{self._url}/{quote(event_id)}"
+        return await self._call("PATCH", url, params=_QUIET, json=body) or {}
 
     async def delete(self, event_id: str) -> None:
         await self._call("DELETE", f"{self._url}/{quote(event_id)}", params=_QUIET)
+
+    async def accept(self, ical_uid: str) -> bool:
+        """Accept, as this account, the invitation to an event in its main calendar.
+
+        False when there is nothing to accept: the invitation has not arrived yet, or it
+        has been answered already (an answer of the person's own is theirs to keep).
+        """
+        page = await self._call("GET", _INVITES, params={"iCalUID": ical_uid}) or {}
+        accepted = False
+        for event in page.get("items", []):
+            me = next((a for a in event.get("attendees", []) if a.get("self")), None)
+            if me is None or me.get("responseStatus", "needsAction") != "needsAction":
+                continue
+            # With the attendees left out, only our own answer is changed.
+            body = {
+                "attendeesOmitted": True,
+                "attendees": [{"email": me["email"], "responseStatus": "accepted"}],
+            }
+            url = f"{_INVITES}/{quote(event['id'])}"
+            await self._call("PATCH", url, params=_QUIET, json=body)
+            accepted = True
+        return accepted
 
 
 # --------------------------------------------------------------------------- sync
 
 
 class GoogleCalendarSync:
-    """Writes every account's booked visits to one calendar."""
+    """Writes the booked visits of its patient cards to one Google account's calendar."""
 
-    def __init__(self, api: GoogleCalendarApi, attendees: Iterable[str]) -> None:
+    def __init__(
+        self,
+        api: GoogleCalendarApi,
+        attendees: Iterable[str],
+        email: str = "",
+        persons: Iterable[str] | None = None,
+    ) -> None:
         self._api = api
         self._attendees = tuple(attendees)
+        self.email = email.lower()
+        # The cards (`person_key`) this calendar holds; None: every card, as before.
+        self._persons = None if persons is None else frozenset(persons)
         # Two accounts refreshing at once must not interleave their requests.
         self._lock = asyncio.Lock()
 
+    def holds(self, account: str, person: str) -> bool:
+        return self._persons is None or person_key(account, person) in self._persons
+
     async def async_sync_account(self, account: str, data: AccountData, now: datetime) -> Plan:
+        """Write the account's cards this calendar holds; the rest of its events go.
+
+        The plan's `current` ends up as every event of the account in the calendar, written
+        or not, as Google answered it — the invitations to answer are read there.
+        """
         wanted = {
             visit.uid: event_body(account, person.name, visit, self._attendees)
             for person in data.persons.values()
+            if self.holds(account, person.name)
             for visit in person.planned
             # Already over, though the clinic still lists it: not ours to add any more.
             if visit.start + DEFAULT_VISIT_DURATION > now
         }
         async with self._lock:
             plan = plan_sync(wanted, await self._api.account_events(account, now), now)
-            for body in plan.insert:
-                await self._api.insert(body)
+            written = [await self._api.insert(body) for body in plan.insert]
             for event_id, body in plan.update:
-                await self._api.update(event_id, body)
+                written.append(await self._api.update(event_id, body))
             for event_id in plan.delete:
                 await self._api.delete(event_id)
+            plan.current.extend(written)
         if plan:
             _LOGGER.info(
                 "Google Calendar: %d added, %d changed, %d removed",
@@ -207,3 +266,32 @@ class GoogleCalendarSync:
                 len(plan.delete),
             )
         return plan
+
+    async def async_accept(self, ical_uid: str) -> bool:
+        async with self._lock:
+            return await self._api.accept(ical_uid)
+
+
+async def async_accept_invitations(
+    events: Iterable[Mapping[str, Any]], syncs: Mapping[str, GoogleCalendarSync]
+) -> int:
+    """Answer, for every linked attendee, the invitations they have not answered yet.
+
+    `events` are as the organizer's calendar answers them, so each attendee's answer is
+    there to read; `syncs` are the linked Google accounts by address. Returns how many
+    invitations were accepted.
+    """
+    accepted = 0
+    for event in events:
+        ical_uid = event.get("iCalUID")
+        if not ical_uid:
+            continue
+        for attendee in event.get("attendees", []):
+            sync = syncs.get(attendee.get("email", "").lower())
+            if sync is None or attendee.get("self") or attendee.get("organizer"):
+                continue
+            if attendee.get("responseStatus", "needsAction") != "needsAction":
+                continue
+            if await sync.async_accept(ical_uid):
+                accepted += 1
+    return accepted

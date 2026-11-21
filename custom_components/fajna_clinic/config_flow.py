@@ -10,7 +10,9 @@ which of them to add; signing in again shows the same choice, already ticked, an
 account's options change it later.
 
 **Google Calendar** is HA's own OAuth with the person's application credentials, then the
-calendar to write to and who is invited to every visit. One link serves every account.
+patient cards whose visits it holds, the calendar to write to, and who is invited to every
+visit. One link per Google account; a card is in one link at most, so no visit is written
+twice.
 """
 
 from __future__ import annotations
@@ -30,10 +32,11 @@ from homeassistant.config_entries import (
     OptionsFlow,
     OptionsFlowWithReload,
 )
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.config_entry_oauth2_flow import AbstractOAuth2FlowHandler
 from homeassistant.helpers.selector import (
+    SelectOptionDict,
     SelectSelector,
     SelectSelectorConfig,
     SelectSelectorMode,
@@ -54,6 +57,7 @@ from .api import (
 from .const import (
     CONF_ATTENDEES,
     CONF_CALENDAR_ID,
+    CONF_CARDS,
     CONF_KIND,
     CONF_PERSONS,
     CONF_PHONE,
@@ -68,6 +72,7 @@ from .const import (
     KIND_ACCOUNT,
     KIND_GOOGLE,
 )
+from .google_calendar import person_key
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -123,9 +128,39 @@ def _read_persons(
     return chosen
 
 
-def _google_schema(calendar_id: str, attendees: list[str]) -> vol.Schema:
+def known_cards(hass: HomeAssistant) -> dict[str, str]:
+    """The cards of the accounts that are up, by `person_key`: their names."""
+    cards: dict[str, str] = {}
+    for entry in hass.config_entries.async_loaded_entries(DOMAIN):
+        if entry_kind(entry) == KIND_ACCOUNT and entry.runtime_data.data:
+            for name in entry.runtime_data.data.persons:
+                cards[person_key(str(entry.unique_id), name)] = name
+    return cards
+
+
+def free_cards(hass: HomeAssistant, cards: dict[str, str], entry_id: str | None) -> dict[str, str]:
+    """The cards no other Google link holds. A link from before the choice holds them all."""
+    taken: set[str] = set()
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        if entry_kind(entry) == KIND_GOOGLE and entry.entry_id != entry_id:
+            held = entry.options.get(CONF_CARDS)
+            taken |= set(cards) if held is None else set(held)
+    return {key: name for key, name in cards.items() if key not in taken}
+
+
+def _google_schema(
+    calendar_id: str, attendees: list[str], cards: dict[str, str], chosen: list[str]
+) -> vol.Schema:
     return vol.Schema(
         {
+            vol.Required(CONF_CARDS, default=[c for c in chosen if c in cards]): SelectSelector(
+                SelectSelectorConfig(
+                    options=[SelectOptionDict(value=k, label=v) for k, v in cards.items()],
+                    multiple=True,
+                    mode=SelectSelectorMode.LIST,
+                    sort=False,
+                )
+            ),
             vol.Required(CONF_CALENDAR_ID, default=calendar_id): str,
             vol.Optional(CONF_ATTENDEES, default=", ".join(attendees)): str,
         }
@@ -133,14 +168,18 @@ def _google_schema(calendar_id: str, attendees: list[str]) -> vol.Schema:
 
 
 def _read_google_settings(
-    user_input: dict[str, Any], errors: dict[str, str]
+    cards: dict[str, str], user_input: dict[str, Any], errors: dict[str, str]
 ) -> dict[str, Any] | None:
+    chosen = [key for key in cards if key in user_input.get(CONF_CARDS, [])]
+    if not chosen:
+        errors[CONF_CARDS] = "no_persons_chosen"
     attendees = parse_attendees(user_input.get(CONF_ATTENDEES, ""))
     if attendees is None:
         errors[CONF_ATTENDEES] = "invalid_email"
+    if errors:
         return None
     calendar_id = user_input[CONF_CALENDAR_ID].strip() or DEFAULT_CALENDAR_ID
-    return {CONF_CALENDAR_ID: calendar_id, CONF_ATTENDEES: attendees}
+    return {CONF_CARDS: chosen, CONF_CALENDAR_ID: calendar_id, CONF_ATTENDEES: attendees}
 
 
 class FajnaConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
@@ -155,6 +194,7 @@ class FajnaConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
         self._phone: str | None = None
         self._persons: list[str] = []
         self._google: dict[str, Any] | None = None
+        self._cards: dict[str, str] = {}
 
     @property
     def logger(self) -> logging.Logger:
@@ -350,9 +390,14 @@ class FajnaConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
     # ------------------------------------------------------------------ google
 
     async def async_step_google(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        if any(entry_kind(e) == KIND_GOOGLE for e in self._async_current_entries()):
-            # Every account writes to the one calendar: a second link would be a second copy.
-            return self.async_abort(reason="google_already_configured")
+        # Asked before Google's consent, so nobody signs in to be told there is nothing to do.
+        cards = known_cards(self.hass)
+        if not cards:
+            return self.async_abort(reason="add_account_first")
+        self._cards = free_cards(self.hass, cards, None)
+        if not self._cards:
+            # A card in two calendars would be a visit written twice.
+            return self.async_abort(reason="no_free_cards")
         return await self.async_step_pick_implementation()
 
     async def async_step_reauth_google(
@@ -385,7 +430,7 @@ class FajnaConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
     ) -> ConfigFlowResult:
         errors: dict[str, str] = {}
         if user_input is not None:
-            settings = _read_google_settings(user_input, errors)
+            settings = _read_google_settings(self._cards, user_input, errors)
             if settings is not None:
                 assert self._google is not None
                 return self.async_create_entry(
@@ -395,26 +440,35 @@ class FajnaConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
                 )
         return self.async_show_form(
             step_id="google_settings",
-            data_schema=_google_schema(DEFAULT_CALENDAR_ID, []),
+            data_schema=_google_schema(DEFAULT_CALENDAR_ID, [], self._cards, []),
             errors=errors,
         )
 
 
 class GoogleOptionsFlow(OptionsFlowWithReload):
-    """Which calendar, and who is invited — changeable without linking Google again."""
+    """Whose cards, which calendar, who is invited — changeable without linking again."""
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
-        if user_input is not None:
-            settings = _read_google_settings(user_input, errors)
-            if settings is not None:
-                return self.async_create_entry(data=settings)
         options = self.config_entry.options
+        known = known_cards(self.hass)
+        cards = free_cards(self.hass, known, self.config_entry.entry_id)
+        held = options.get(CONF_CARDS)
+        if user_input is not None:
+            settings = _read_google_settings(cards, user_input, errors)
+            if settings is not None:
+                # A card of an account that is down right now is not offered, but kept.
+                unseen = [key for key in held or [] if key not in known]
+                settings[CONF_CARDS] = [*settings[CONF_CARDS], *unseen]
+                return self.async_create_entry(data=settings)
         return self.async_show_form(
             step_id="init",
             data_schema=_google_schema(
                 options.get(CONF_CALENDAR_ID, DEFAULT_CALENDAR_ID),
                 options.get(CONF_ATTENDEES, []),
+                cards,
+                # A link from before the choice held every card: all of them are ticked.
+                list(cards) if held is None else held,
             ),
             errors=errors,
         )
