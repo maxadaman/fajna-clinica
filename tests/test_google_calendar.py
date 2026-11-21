@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 import json
 from typing import Any
+from urllib.parse import unquote
 
 import pytest
 
@@ -13,8 +14,10 @@ from custom_components.fajna_clinic.google_calendar import (
     GoogleApiError,
     GoogleCalendarApi,
     GoogleCalendarSync,
+    async_accept_invitations,
     event_body,
     first_name,
+    person_key,
     plan_sync,
 )
 from custom_components.fajna_clinic.models import AccountData, PersonData, PlannedVisit
@@ -190,10 +193,13 @@ class FakeGoogle:
             return FakeResponse(200, {"items": items})
         if method == "POST":
             self._next += 1
-            self.events[f"e{self._next}"] = stored(kwargs["json"], f"e{self._next}")
-            return FakeResponse(200, self.events[f"e{self._next}"])
+            event = stored(kwargs["json"], f"e{self._next}")
+            event["iCalUID"] = f"e{self._next}@google.com"
+            self.events[event["id"]] = event
+            return FakeResponse(200, event)
         if method == "PATCH":
-            self.events[event_id] = stored(kwargs["json"], event_id)
+            ical_uid = self.events[event_id].get("iCalUID")
+            self.events[event_id] = {**stored(kwargs["json"], event_id), "iCalUID": ical_uid}
             return FakeResponse(200, self.events[event_id])
         if method == "DELETE":
             if self.events.pop(event_id, None) is None:
@@ -298,3 +304,150 @@ async def test_listing_follows_pages() -> None:
 
     assert [e["id"] for e in events] == ["a", "b"]
     assert tokens == [None, "p2"]
+
+
+# --------------------------------------------------------------------------- cards
+
+
+async def test_a_calendar_holds_only_its_cards() -> None:
+    google = FakeGoogle()
+    maria = person_key(ACCOUNT, "Тестенко Марія Іванівна")
+    sync = GoogleCalendarSync(GoogleCalendarApi(google, "primary"), [], persons=[maria])
+    data = AccountData(
+        persons={
+            "Тестенко Іван Петрович": PersonData("Тестенко Іван Петрович", [MASSAGE]),
+            "Тестенко Марія Іванівна": PersonData("Тестенко Марія Іванівна", [THERAPIST]),
+        }
+    )
+
+    plan = await sync.async_sync_account(ACCOUNT, data, NOW)
+
+    assert [e["summary"] for e in google.events.values()] == ["[Марія] Консультація"]
+    # What was written is reported with what Google made of it.
+    assert [e["iCalUID"] for e in plan.current] == ["e1@google.com"]
+
+
+async def test_a_card_taken_out_of_a_calendar_leaves_it() -> None:
+    google = FakeGoogle()
+    api = GoogleCalendarApi(google, "primary")
+    await GoogleCalendarSync(api, []).async_sync_account(ACCOUNT, _account(MASSAGE), NOW)
+
+    # The card now has a calendar of its own: this one holds nobody of the account.
+    await GoogleCalendarSync(api, [], persons=[]).async_sync_account(
+        ACCOUNT, _account(MASSAGE), NOW
+    )
+
+    assert google.events == {}
+
+
+async def test_the_events_left_alone_are_reported_too() -> None:
+    google = FakeGoogle()
+    sync = GoogleCalendarSync(GoogleCalendarApi(google, "primary"), [WIFE])
+    await sync.async_sync_account(ACCOUNT, _account(MASSAGE), NOW)
+
+    plan = await sync.async_sync_account(ACCOUNT, _account(MASSAGE), NOW)
+
+    assert not plan
+    assert [e["iCalUID"] for e in plan.current] == ["e1@google.com"]
+
+
+# --------------------------------------------------------------------------- invitations
+
+
+class FakeInvites:
+    """An attendee's main calendar, holding the invitations it was sent."""
+
+    def __init__(self, email: str, **answers: str) -> None:
+        self.email = email
+        self.answers = answers  # by iCalUID
+        self.calls: list[tuple[str, str, dict[str, Any], Any]] = []
+
+    async def __call__(self, method: str, url: str, **kwargs: Any) -> FakeResponse:
+        self.calls.append((method, url, kwargs.get("params", {}), kwargs.get("json")))
+        if method == "GET":
+            uid = kwargs["params"]["iCalUID"]
+            if uid not in self.answers:
+                return FakeResponse(200, {"items": []})
+            me = {"email": self.email, "self": True, "responseStatus": self.answers[uid]}
+            other = {"email": "organizer@example.com", "organizer": True}
+            return FakeResponse(200, {"items": [{"id": f"copy-{uid}", "attendees": [other, me]}]})
+        if method == "PATCH":
+            uid = unquote(url.rsplit("/copy-", 1)[1])
+            self.answers[uid] = kwargs["json"]["attendees"][0]["responseStatus"]
+            return FakeResponse(200, {})
+        raise AssertionError(method)
+
+
+def _linked(invites: FakeInvites) -> GoogleCalendarSync:
+    return GoogleCalendarSync(GoogleCalendarApi(invites, "primary"), [], email=invites.email)
+
+
+async def test_a_linked_attendee_accepts_quietly_in_their_main_calendar() -> None:
+    me = FakeInvites("Me@Gmail.com", **{"e1@google.com": "needsAction"})
+    event = {"iCalUID": "e1@google.com", "attendees": [{"email": "me@gmail.com"}]}
+
+    accepted = await async_accept_invitations([event], {"me@gmail.com": _linked(me)})
+
+    assert accepted == 1
+    assert me.answers == {"e1@google.com": "accepted"}
+    get, patch = me.calls
+    assert get[1].endswith("/calendars/primary/events")
+    assert patch[1].endswith("/calendars/primary/events/copy-e1%40google.com")
+    assert patch[2] == {"sendUpdates": "none"}
+    # Only our own answer: the other attendees are left out of the change.
+    assert patch[3] == {
+        "attendeesOmitted": True,
+        "attendees": [{"email": "Me@Gmail.com", "responseStatus": "accepted"}],
+    }
+
+
+async def test_an_answered_invitation_is_not_asked_again() -> None:
+    me = FakeInvites("me@gmail.com")
+    event = {
+        "iCalUID": "e1@google.com",
+        "attendees": [{"email": "me@gmail.com", "responseStatus": "declined"}],
+    }
+
+    assert await async_accept_invitations([event], {"me@gmail.com": _linked(me)}) == 0
+    assert me.calls == []
+
+
+async def test_an_answer_of_the_persons_own_is_kept() -> None:
+    # The organizer's copy still says «no answer», but the attendee has declined meanwhile.
+    me = FakeInvites("me@gmail.com", **{"e1@google.com": "declined"})
+    event = {"iCalUID": "e1@google.com", "attendees": [{"email": "me@gmail.com"}]}
+
+    assert await async_accept_invitations([event], {"me@gmail.com": _linked(me)}) == 0
+    assert me.answers == {"e1@google.com": "declined"}
+    assert [c[0] for c in me.calls] == ["GET"]
+
+
+async def test_an_invitation_not_arrived_yet_waits_for_the_next_sync() -> None:
+    me = FakeInvites("me@gmail.com")
+    event = {"iCalUID": "e1@google.com", "attendees": [{"email": "me@gmail.com"}]}
+
+    assert await async_accept_invitations([event], {"me@gmail.com": _linked(me)}) == 0
+
+
+async def test_attendees_not_linked_are_left_alone() -> None:
+    me = FakeInvites("me@gmail.com", **{"e1@google.com": "needsAction"})
+    event = {"iCalUID": "e1@google.com", "attendees": [{"email": WIFE}]}
+
+    assert await async_accept_invitations([event], {"me@gmail.com": _linked(me)}) == 0
+    assert me.calls == []
+
+
+async def test_a_visit_written_with_a_linked_guest_is_accepted_end_to_end() -> None:
+    """Valeria's massage, in her calendar, with me invited: I accept it at once."""
+    hers = FakeGoogle()
+    valeria = GoogleCalendarSync(
+        GoogleCalendarApi(hers, "primary"), ["me@gmail.com"], email="valeria@gmail.com"
+    )
+    plan = await valeria.async_sync_account(ACCOUNT, _account(MASSAGE), NOW)
+    me = FakeInvites("me@gmail.com", **{"e1@google.com": "needsAction"})
+
+    syncs = {"valeria@gmail.com": valeria, "me@gmail.com": _linked(me)}
+    accepted = await async_accept_invitations(plan.current, syncs)
+
+    assert accepted == 1
+    assert me.answers == {"e1@google.com": "accepted"}

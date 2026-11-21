@@ -1,9 +1,9 @@
-"""Polls one account of the clinic, and passes its visits on to Google Calendar."""
+"""Polls one account of the clinic, and passes its visits on to the linked Google Calendars."""
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -13,10 +13,8 @@ from homeassistant.util import dt as dt_util
 
 from .api import AuthExpired, FajnaClient, FajnaError
 from .const import CONF_KIND, CONF_PERSONS, DOMAIN, KIND_GOOGLE, UPDATE_INTERVAL
+from .google_calendar import GoogleCalendarSync, async_accept_invitations
 from .models import AccountData
-
-if TYPE_CHECKING:
-    from .google_calendar import GoogleCalendarSync
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -55,19 +53,33 @@ class FajnaCoordinator(DataUpdateCoordinator[AccountData]):
         await self._async_push_to_google(data)
         return data
 
-    def _google(self) -> GoogleCalendarSync | None:
-        for entry in self.hass.config_entries.async_loaded_entries(DOMAIN):
-            if entry.data.get(CONF_KIND) == KIND_GOOGLE:
-                return entry.runtime_data
-        return None
+    def _google(self) -> list[GoogleCalendarSync]:
+        return [
+            entry.runtime_data
+            for entry in self.hass.config_entries.async_loaded_entries(DOMAIN)
+            if entry.data.get(CONF_KIND) == KIND_GOOGLE
+        ]
 
     async def _async_push_to_google(self, data: AccountData) -> None:
-        sync = self._google()
-        if sync is None:
+        """Each linked calendar gets its cards, then linked attendees answer their invites."""
+        syncs = self._google()
+        account = self.config_entry.unique_id
+        now = dt_util.now()
+        events: list[dict[str, Any]] = []
+        for sync in syncs:
+            try:
+                events.extend((await sync.async_sync_account(account, data, now)).current)
+            except Exception as err:
+                # The calendar is a copy: its failure must not take the account's entities
+                # down. The next refresh tries again, from the clinic's state then.
+                _LOGGER.warning("Could not update Google Calendar %s: %s", sync.email, err)
+        if not events:
             return
         try:
-            await sync.async_sync_account(self.config_entry.unique_id, data, dt_util.now())
+            accepted = await async_accept_invitations(events, {s.email: s for s in syncs})
         except Exception as err:
-            # The calendar is a copy: its failure must not take the account's entities down.
-            # The next refresh tries again, from the clinic's state then.
-            _LOGGER.warning("Could not update Google Calendar: %s", err)
+            # An invitation left unanswered is answered on the next refresh.
+            _LOGGER.warning("Could not accept a Google Calendar invitation: %s", err)
+            return
+        if accepted:
+            _LOGGER.info("Google Calendar: %d invitation(s) accepted", accepted)

@@ -1,7 +1,8 @@
 """The Fajna Clinic integration: a patient account's visits in Home Assistant.
 
-Two kinds of entry share the domain: a clinic account (one per phone number), and the
-Google Calendar every account's booked visits are written to (one at most).
+Two kinds of entry share the domain: a clinic account (one per phone number), and a Google
+account whose calendar holds the visits of the patient cards chosen for it (one per Google
+account).
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from .api import FajnaClient
 from .const import (
     CONF_ATTENDEES,
     CONF_CALENDAR_ID,
+    CONF_CARDS,
     CONF_KIND,
     CONF_PERSONS,
     CONF_TOKEN,
@@ -82,7 +84,12 @@ async def _async_setup_google(hass: HomeAssistant, entry: GoogleConfigEntry) -> 
     api = GoogleCalendarApi(
         session.async_request, entry.options.get(CONF_CALENDAR_ID, DEFAULT_CALENDAR_ID)
     )
-    entry.runtime_data = GoogleCalendarSync(api, entry.options.get(CONF_ATTENDEES, []))
+    entry.runtime_data = GoogleCalendarSync(
+        api,
+        entry.options.get(CONF_ATTENDEES, []),
+        email=entry.unique_id or "",
+        persons=entry.options.get(CONF_CARDS),
+    )
     # The accounts sync on their next refresh; asking now makes a new link work at once.
     for account in hass.config_entries.async_loaded_entries(DOMAIN):
         if entry_kind(account) == KIND_ACCOUNT:

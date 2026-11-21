@@ -34,6 +34,9 @@ CONF_KIND = "kind"
 KIND_ACCOUNT = "account"
 KIND_GOOGLE = "google"
 
+# The patient cards a Google entry's calendar holds (an option), as `person_key`s.
+# Absent: every card of every account, as the first Google link did.
+CONF_CARDS = "cards"
 CONF_CALENDAR_ID = "calendar_id"
 CONF_ATTENDEES = "attendees"
 DEFAULT_CALENDAR_ID = "primary"
