@@ -71,10 +71,15 @@ class LoginForm:
     Every step is the same Server Action, so the form is the state: the hidden inputs
     (`$ACTION_ID_…`, and whatever Next adds) go back as they are, and the one visible
     input says which step this is — `phone`, `pin` or `password`.
+
+    An account with several patient cards has one more step after the password: a submit
+    button per card, all named `name`, each with a card's full name as its value. Then
+    `field` is the buttons' name and `choices` their values.
     """
 
     hidden: tuple[tuple[str, str], ...]
     field: str
+    choices: tuple[str, ...] = ()
 
 
 def parse_login_form(html: str) -> LoginForm:
@@ -89,8 +94,22 @@ def parse_login_form(html: str) -> LoginForm:
                 hidden.append((name, el.get("value") or ""))
             else:
                 visible.append(name)
-        if any(name.startswith("$ACTION_ID_") for name, _ in hidden) and len(visible) == 1:
+        if not any(name.startswith("$ACTION_ID_") for name, _ in hidden):
+            continue
+        if len(visible) == 1:
             return LoginForm(hidden=tuple(hidden), field=visible[0])
+        # The card step: named buttons with values. The logout form's button has neither.
+        buttons = [
+            (b["name"], b["value"])
+            for b in form.find_all("button")
+            if b.get("name") and b.get("value")
+        ]
+        if not visible and buttons and len({name for name, _ in buttons}) == 1:
+            return LoginForm(
+                hidden=tuple(hidden),
+                field=buttons[0][0],
+                choices=tuple(value for _, value in buttons),
+            )
     raise ParseError("no login form on the page")
 
 

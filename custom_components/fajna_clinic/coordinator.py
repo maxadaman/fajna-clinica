@@ -12,7 +12,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from .api import AuthExpired, FajnaClient, FajnaError
-from .const import CONF_KIND, DOMAIN, KIND_GOOGLE, UPDATE_INTERVAL
+from .const import CONF_KIND, CONF_PERSONS, DOMAIN, KIND_GOOGLE, UPDATE_INTERVAL
 from .models import AccountData
 
 if TYPE_CHECKING:
@@ -24,7 +24,7 @@ type FajnaConfigEntry = ConfigEntry[FajnaCoordinator]
 
 
 class FajnaCoordinator(DataUpdateCoordinator[AccountData]):
-    """Reads every patient card of one account every half hour."""
+    """Reads the chosen patient cards of one account every half hour."""
 
     config_entry: FajnaConfigEntry
 
@@ -38,9 +38,14 @@ class FajnaCoordinator(DataUpdateCoordinator[AccountData]):
         )
         self.client = client
 
+    @property
+    def persons(self) -> list[str] | None:
+        """The cards chosen for this entry; None for an entry from before the choice."""
+        return self.config_entry.options.get(CONF_PERSONS)
+
     async def _async_update_data(self) -> AccountData:
         try:
-            data = await self.client.fetch_account()
+            data = await self.client.fetch_account(self.persons)
         except AuthExpired as err:
             # Signing in again needs an SMS code, so it is the person's step: HA asks them.
             raise ConfigEntryAuthFailed(str(err)) from err

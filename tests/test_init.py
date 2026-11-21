@@ -14,7 +14,13 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
 from custom_components.fajna_clinic.api import AuthExpired, CannotConnect
-from custom_components.fajna_clinic.const import CLINIC_TZ, CONF_PHONE, CONF_TOKEN, DOMAIN
+from custom_components.fajna_clinic.const import (
+    CLINIC_TZ,
+    CONF_PERSONS,
+    CONF_PHONE,
+    CONF_TOKEN,
+    DOMAIN,
+)
 from custom_components.fajna_clinic.models import AccountData, PersonData, PlannedVisit
 
 PHONE = "+380991112233"
@@ -125,6 +131,32 @@ async def test_a_patient_added_later_gets_entities(
         await hass.async_block_till_done()
 
     assert len(hass.states.async_all("calendar")) == 2
+
+
+async def test_only_the_chosen_cards_are_read_and_the_rest_removed(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory
+) -> None:
+    freezer.move_to(NOW)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=PHONE,
+        data={CONF_PHONE: PHONE, CONF_TOKEN: "t"},
+        options={CONF_PERSONS: [IVAN.name]},
+    )
+    entry.add_to_hass(hass)
+    # Maria's card was added before, and has since been unticked.
+    devices = dr.async_get(hass)
+    devices.async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"{PHONE}_{MARIA.name}")}
+    )
+    fetch = AsyncMock(return_value=account(IVAN))
+    with patch("custom_components.fajna_clinic.api.FajnaClient.fetch_account", fetch):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    fetch.assert_awaited_once_with([IVAN.name])
+    names = [d.name for d in dr.async_entries_for_config_entry(devices, entry.entry_id)]
+    assert names == [IVAN.name]
 
 
 async def test_a_dead_session_starts_reauth(hass: HomeAssistant) -> None:

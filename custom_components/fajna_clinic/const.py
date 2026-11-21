@@ -25,6 +25,8 @@ UPDATE_INTERVAL = timedelta(minutes=30)
 
 CONF_PHONE = "phone"
 CONF_TOKEN = "token"
+# The patient cards an account entry reads (an option). Absent: every card, as before.
+CONF_PERSONS = "persons"
 
 # One domain, two kinds of entry: a clinic account, and the Google Calendar the accounts'
 # visits are written to. An entry without a kind is an account (the first version's).

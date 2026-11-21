@@ -150,14 +150,18 @@ async def test_options_change_the_invitees(hass: HomeAssistant) -> None:
     }
 
 
-async def test_an_account_has_no_options(hass: HomeAssistant) -> None:
+async def test_each_kind_has_its_own_options(hass: HomeAssistant) -> None:
     account = MockConfigEntry(domain=DOMAIN, data={CONF_KIND: KIND_ACCOUNT})
     account.add_to_hass(hass)
 
-    from custom_components.fajna_clinic.config_flow import FajnaConfigFlow
+    from custom_components.fajna_clinic.config_flow import (
+        AccountOptionsFlow,
+        FajnaConfigFlow,
+        GoogleOptionsFlow,
+    )
 
-    assert not FajnaConfigFlow.async_supports_options_flow(account)
-    assert FajnaConfigFlow.async_supports_options_flow(google_entry())
+    assert isinstance(FajnaConfigFlow.async_get_options_flow(account), AccountOptionsFlow)
+    assert isinstance(FajnaConfigFlow.async_get_options_flow(google_entry()), GoogleOptionsFlow)
 
 
 # --------------------------------------------------------------------------- accounts → Google

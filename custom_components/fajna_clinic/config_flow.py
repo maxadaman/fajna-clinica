@@ -5,6 +5,10 @@ password. The password is posted to the site once and never stored. What is kept
 session cookie, and when the site ends that session HA asks for the steps again (reauth):
 signing in needs a fresh SMS code, so it cannot happen without the person.
 
+One phone can hold several patient cards (a family's). Once signed in, the person picks
+which of them to add; signing in again shows the same choice, already ticked, and the
+account's options change it later.
+
 **Google Calendar** is HA's own OAuth with the person's application credentials, then the
 calendar to write to and who is invited to every visit. One link serves every account.
 """
@@ -21,24 +25,37 @@ import voluptuous as vol
 from homeassistant.config_entries import (
     SOURCE_REAUTH,
     ConfigEntry,
+    ConfigEntryState,
     ConfigFlowResult,
+    OptionsFlow,
     OptionsFlowWithReload,
 )
 from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.config_entry_oauth2_flow import AbstractOAuth2FlowHandler
 from homeassistant.helpers.selector import (
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
     TextSelector,
     TextSelectorConfig,
     TextSelectorType,
 )
 
 from . import create_client, entry_kind
-from .api import CannotConnect, FajnaClient, FajnaError, LoginRejected, decode_token
+from .api import (
+    AuthExpired,
+    CannotConnect,
+    FajnaClient,
+    FajnaError,
+    LoginRejected,
+    decode_token,
+)
 from .const import (
     CONF_ATTENDEES,
     CONF_CALENDAR_ID,
     CONF_KIND,
+    CONF_PERSONS,
     CONF_PHONE,
     CONF_TOKEN,
     DEFAULT_CALENDAR_ID,
@@ -82,6 +99,30 @@ def parse_attendees(raw: str) -> list[str] | None:
     return sorted(set(emails))
 
 
+def _persons_schema(persons: list[str], chosen: list[str]) -> vol.Schema:
+    """Ticks, one per card on the account, `chosen` already ticked."""
+    return vol.Schema(
+        {
+            vol.Required(CONF_PERSONS, default=[p for p in chosen if p in persons]): SelectSelector(
+                SelectSelectorConfig(
+                    options=persons, multiple=True, mode=SelectSelectorMode.LIST, sort=False
+                )
+            )
+        }
+    )
+
+
+def _read_persons(
+    persons: list[str], user_input: dict[str, Any], errors: dict[str, str]
+) -> list[str] | None:
+    """The ticked cards in the account's order; None, with the error, if there are none."""
+    chosen = [p for p in persons if p in user_input.get(CONF_PERSONS, [])]
+    if not chosen:
+        errors[CONF_PERSONS] = "no_persons_chosen"
+        return None
+    return chosen
+
+
 def _google_schema(calendar_id: str, attendees: list[str]) -> vol.Schema:
     return vol.Schema(
         {
@@ -112,6 +153,7 @@ class FajnaConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
         super().__init__()
         self._client: FajnaClient | None = None
         self._phone: str | None = None
+        self._persons: list[str] = []
         self._google: dict[str, Any] | None = None
 
     @property
@@ -125,13 +167,10 @@ class FajnaConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
 
     @staticmethod
     @callback
-    def async_get_options_flow(config_entry: ConfigEntry) -> GoogleOptionsFlow:
-        return GoogleOptionsFlow()
-
-    @classmethod
-    @callback
-    def async_supports_options_flow(cls, config_entry: ConfigEntry) -> bool:
-        return entry_kind(config_entry) == KIND_GOOGLE
+    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
+        if entry_kind(config_entry) == KIND_GOOGLE:
+            return GoogleOptionsFlow()
+        return AccountOptionsFlow()
 
     # ------------------------------------------------------------------ entry points
 
@@ -237,11 +276,66 @@ class FajnaConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
         return await self._async_finish_account()
 
     async def _async_finish_account(self) -> ConfigFlowResult:
+        """Signed in: which cards the account has, then which of them to add."""
+        assert self._client is not None
+        reauth = self.source == SOURCE_REAUTH
+        try:
+            self._persons = await self._client.list_persons()
+        except FajnaError as err:
+            if reauth:
+                # The new session matters more than the choice: keep the choice as it was.
+                _LOGGER.warning("Signed in again, but could not list the cards: %s", err)
+                return self._async_save_account(None)
+            if isinstance(err, CannotConnect):
+                return self.async_abort(reason="cannot_connect")
+            _LOGGER.exception("Unexpected answer from the clinic's account")
+            return self.async_abort(reason="unknown")
+        if not self._persons:
+            if reauth:
+                return self._async_save_account(None)
+            return self.async_abort(reason="no_persons")
+        if len(self._persons) == 1:
+            # Nothing to choose from.
+            return self._async_save_account(self._persons)
+        return await (self.async_step_reauth_persons() if reauth else self.async_step_persons())
+
+    async def async_step_persons(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        return self._async_choose_persons("persons", [], user_input)
+
+    async def async_step_reauth_persons(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        # The entry's cards ticked, so sending the form as it is changes nothing.
+        # An entry from before the choice read every card: all of them are ticked.
+        chosen = self._get_reauth_entry().options.get(CONF_PERSONS, self._persons)
+        return self._async_choose_persons("reauth_persons", chosen, user_input)
+
+    def _async_choose_persons(
+        self, step_id: str, chosen: list[str], user_input: dict[str, Any] | None
+    ) -> ConfigFlowResult:
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            persons = _read_persons(self._persons, user_input, errors)
+            if persons is not None:
+                return self._async_save_account(persons)
+        return self.async_show_form(
+            step_id=step_id,
+            data_schema=_persons_schema(self._persons, chosen),
+            description_placeholders={"phone": self._phone or ""},
+            errors=errors,
+        )
+
+    def _async_save_account(self, persons: list[str] | None) -> ConfigFlowResult:
+        """The entry, with the session and the chosen cards (None: leave them as they are)."""
         assert self._client is not None and self._client.token and self._phone
         token = self._client.token
         if self.source == SOURCE_REAUTH:
+            entry = self._get_reauth_entry()
+            options = entry.options if persons is None else {**entry.options, CONF_PERSONS: persons}
             return self.async_update_reload_and_abort(
-                self._get_reauth_entry(), data_updates={CONF_TOKEN: token}
+                entry, data_updates={CONF_TOKEN: token}, options=options
             )
         try:
             title = decode_token(token).get("name") or self._phone
@@ -250,6 +344,7 @@ class FajnaConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
         return self.async_create_entry(
             title=str(title),
             data={CONF_KIND: KIND_ACCOUNT, CONF_PHONE: self._phone, CONF_TOKEN: token},
+            options={CONF_PERSONS: persons},
         )
 
     # ------------------------------------------------------------------ google
@@ -320,6 +415,48 @@ class GoogleOptionsFlow(OptionsFlowWithReload):
             data_schema=_google_schema(
                 options.get(CONF_CALENDAR_ID, DEFAULT_CALENDAR_ID),
                 options.get(CONF_ATTENDEES, []),
+            ),
+            errors=errors,
+        )
+
+
+class AccountOptionsFlow(OptionsFlowWithReload):
+    """Which of the account's cards are in Home Assistant, without signing in again."""
+
+    def __init__(self) -> None:
+        self._persons: list[str] = []
+
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """The cards the account lists now, read through the entry's own session."""
+        entry = self.config_entry
+        if entry.state is not ConfigEntryState.LOADED:
+            return self.async_abort(reason="account_not_loaded")
+        try:
+            self._persons = await entry.runtime_data.client.list_persons()
+        except AuthExpired:
+            return self.async_abort(reason="account_not_loaded")
+        except CannotConnect:
+            return self.async_abort(reason="cannot_connect")
+        except FajnaError:
+            _LOGGER.exception("Unexpected answer from the clinic's account")
+            return self.async_abort(reason="unknown")
+        if not self._persons:
+            return self.async_abort(reason="no_persons")
+        return await self.async_step_persons()
+
+    async def async_step_persons(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        entry = self.config_entry
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            persons = _read_persons(self._persons, user_input, errors)
+            if persons is not None:
+                return self.async_create_entry(data={**entry.options, CONF_PERSONS: persons})
+        return self.async_show_form(
+            step_id="persons",
+            data_schema=_persons_schema(
+                self._persons, entry.options.get(CONF_PERSONS, self._persons)
             ),
             errors=errors,
         )

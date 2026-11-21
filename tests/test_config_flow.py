@@ -12,10 +12,11 @@ from homeassistant.config_entries import SOURCE_USER
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 
-from custom_components.fajna_clinic.api import CannotConnect, LoginRejected
+from custom_components.fajna_clinic.api import CannotConnect, LoginRejected, UnexpectedPage
 from custom_components.fajna_clinic.config_flow import normalize_phone
 from custom_components.fajna_clinic.const import (
     CONF_KIND,
+    CONF_PERSONS,
     CONF_PHONE,
     CONF_TOKEN,
     DOMAIN,
@@ -26,6 +27,9 @@ from .conftest import make_token
 
 PHONE = "+380991112233"
 TOKEN = make_token(name="Тестенко Іван Петрович")
+IVAN = "Тестенко Іван Петрович"
+MARIA = "Тестенко Марія Іванівна"
+OLENA = "Тестенко Олена Іванівна"
 
 
 @pytest.fixture
@@ -35,6 +39,7 @@ def client() -> Generator[MagicMock]:
     mock.start_login = AsyncMock(return_value="phone")
     mock.submit = AsyncMock(side_effect=["pin", "password", None])
     mock.token = TOKEN
+    mock.list_persons = AsyncMock(return_value=[IVAN])
     with (
         patch("custom_components.fajna_clinic.config_flow.create_client", return_value=mock),
         patch("custom_components.fajna_clinic.async_setup_entry", return_value=True),
@@ -84,6 +89,8 @@ async def test_full_login_creates_the_entry(hass: HomeAssistant, client: MagicMo
     assert result["title"] == "Тестенко Іван Петрович"
     # The password is not kept: only the phone and the session.
     assert result["data"] == {CONF_KIND: KIND_ACCOUNT, CONF_PHONE: PHONE, CONF_TOKEN: TOKEN}
+    # One card: nothing to choose, it is added.
+    assert result["options"] == {CONF_PERSONS: [IVAN]}
     assert result["result"].unique_id == PHONE
     assert [c.args for c in client.submit.await_args_list] == [(PHONE,), ("1234",), ("secret",)]
 
@@ -163,3 +170,158 @@ async def test_reauth_replaces_the_session(hass: HomeAssistant, client: MagicMoc
     assert result["reason"] == "reauth_successful"
     assert entry.data == {CONF_PHONE: PHONE, CONF_TOKEN: TOKEN}
     assert client.submit.await_args_list[0].args == (PHONE,)
+
+
+async def _sign_in(hass: HomeAssistant, result: dict) -> dict:
+    """From the phone form (or the reauth confirmation) through the code and password."""
+    if result["step_id"] == "account":
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_PHONE: PHONE}
+        )
+    else:
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"pin": "1234"})
+    return await hass.config_entries.flow.async_configure(result["flow_id"], {"password": "secret"})
+
+
+def _ticked(result: dict) -> list[str]:
+    """What the card form has ticked to begin with."""
+    (key,) = result["data_schema"].schema
+    return key.default()
+
+
+async def test_the_cards_to_add_are_chosen(hass: HomeAssistant, client: MagicMock) -> None:
+    client.list_persons.return_value = [IVAN, MARIA, OLENA]
+    result = await _sign_in(hass, await _start(hass))
+
+    assert result["step_id"] == "persons"
+    assert _ticked(result) == []
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_PERSONS: []})
+    assert result["errors"] == {CONF_PERSONS: "no_persons_chosen"}
+
+    # Kept in the account's order, whatever order they were ticked in.
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_PERSONS: [OLENA, IVAN]}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["options"] == {CONF_PERSONS: [IVAN, OLENA]}
+
+
+async def test_an_account_without_cards_is_not_added(
+    hass: HomeAssistant, client: MagicMock
+) -> None:
+    client.list_persons.return_value = []
+    result = await _sign_in(hass, await _start(hass))
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "no_persons"
+
+
+def _reauth_entry(hass: HomeAssistant, **options) -> MockConfigEntry:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=PHONE,
+        data={CONF_PHONE: PHONE, CONF_TOKEN: "old"},
+        options=options,
+    )
+    entry.add_to_hass(hass)
+    return entry
+
+
+async def test_reauth_keeps_the_cards_when_sent_as_is(
+    hass: HomeAssistant, client: MagicMock
+) -> None:
+    client.list_persons.return_value = [IVAN, MARIA, OLENA]
+    entry = _reauth_entry(hass, **{CONF_PERSONS: [MARIA]})
+
+    result = await _sign_in(hass, await entry.start_reauth_flow(hass))
+    assert result["step_id"] == "reauth_persons"
+    assert _ticked(result) == [MARIA]
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_PERSONS: _ticked(result)}
+    )
+
+    assert result["reason"] == "reauth_successful"
+    assert entry.options == {CONF_PERSONS: [MARIA]}
+    assert entry.data[CONF_TOKEN] == TOKEN
+
+
+async def test_reauth_can_change_the_cards(hass: HomeAssistant, client: MagicMock) -> None:
+    client.list_persons.return_value = [IVAN, MARIA]
+    entry = _reauth_entry(hass, **{CONF_PERSONS: [MARIA]})
+
+    result = await _sign_in(hass, await entry.start_reauth_flow(hass))
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_PERSONS: [IVAN, MARIA]}
+    )
+
+    assert result["reason"] == "reauth_successful"
+    assert entry.options == {CONF_PERSONS: [IVAN, MARIA]}
+
+
+async def test_reauth_of_an_entry_from_before_the_choice_ticks_every_card(
+    hass: HomeAssistant, client: MagicMock
+) -> None:
+    client.list_persons.return_value = [IVAN, MARIA]
+    entry = _reauth_entry(hass)
+
+    result = await _sign_in(hass, await entry.start_reauth_flow(hass))
+
+    assert result["step_id"] == "reauth_persons"
+    assert _ticked(result) == [IVAN, MARIA]
+
+
+async def test_reauth_saves_the_session_when_the_cards_cannot_be_read(
+    hass: HomeAssistant, client: MagicMock
+) -> None:
+    client.list_persons.side_effect = UnexpectedPage("changed")
+    entry = _reauth_entry(hass, **{CONF_PERSONS: [MARIA]})
+
+    result = await _sign_in(hass, await entry.start_reauth_flow(hass))
+
+    assert result["reason"] == "reauth_successful"
+    assert entry.data[CONF_TOKEN] == TOKEN
+    assert entry.options == {CONF_PERSONS: [MARIA]}
+
+
+async def test_options_change_the_cards(hass: HomeAssistant) -> None:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=PHONE,
+        data={CONF_KIND: KIND_ACCOUNT, CONF_PHONE: PHONE, CONF_TOKEN: "t"},
+        options={CONF_PERSONS: [IVAN]},
+    )
+    entry.add_to_hass(hass)
+    with (
+        patch(
+            "custom_components.fajna_clinic.api.FajnaClient.list_persons",
+            AsyncMock(return_value=[IVAN, MARIA]),
+        ),
+        patch("custom_components.fajna_clinic.api.FajnaClient.fetch_account", AsyncMock()),
+        patch("custom_components.fajna_clinic.PLATFORMS", []),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        assert result["step_id"] == "persons"
+        assert _ticked(result) == [IVAN]
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], {CONF_PERSONS: [MARIA]}
+        )
+        await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options == {CONF_PERSONS: [MARIA]}
+
+
+async def test_options_need_a_working_account(hass: HomeAssistant) -> None:
+    entry = MockConfigEntry(
+        domain=DOMAIN, unique_id=PHONE, data={CONF_KIND: KIND_ACCOUNT, CONF_PHONE: PHONE}
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "account_not_loaded"

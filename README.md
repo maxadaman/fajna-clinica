@@ -1,7 +1,8 @@
 # Fajna Clinic for Home Assistant
 
 The patient account of [Файна Клініка](https://fajna.clinic) in Home Assistant: the visits
-you have booked, as a calendar and sensors, for every patient card of every account you add.
+you have booked, as a calendar and sensors, for the patient cards you choose of every account
+you add.
 
 The clinic has no API. The integration signs in the way the site's own form does and reads
 the account page, so a redesign of the site can break it until the parser is updated.
@@ -17,11 +18,16 @@ Settings → Devices & services → Add integration → **Fajna Clinic**, then t
 steps: phone number, the code the clinic texts, the account password. The password is sent
 to the clinic once and is not stored; what is kept is the session cookie.
 
-Add the integration again for another account. Every patient card of an account becomes a
-device of its own.
+One phone can hold several patient cards (a family's). Once signed in, you tick which of
+them to add; an account with one card skips the question. Every chosen card becomes a device
+of its own. The account's **Configure** button changes the choice later: an unticked card is
+removed with its entities and its Google Calendar events.
+
+Add the integration again for another account.
 
 When the clinic ends the session, Home Assistant shows a *re-authentication* notice: signing
-in again needs a fresh SMS code, so it cannot happen without you.
+in again needs a fresh SMS code, so it cannot happen without you. Afterwards the card choice
+comes up again with the cards already added ticked: send it as it is to keep them.
 
 ## What you get, per patient
 

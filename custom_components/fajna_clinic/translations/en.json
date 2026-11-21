@@ -27,13 +27,21 @@
         "description": "Enter the patient account password. It is sent to the clinic once and not stored.",
         "data": { "password": "Password" }
       },
+      "persons": {
+        "title": "Patient cards",
+        "description": "The account of {phone} has several patient cards. Tick the ones to add to Home Assistant; you can change this later in the account's options.",
+        "data": { "persons": "Cards" }
+      },
       "reauth_confirm": {
         "title": "Sign in again",
         "description": "The clinic has ended the session of {phone}. Continue to receive a new SMS code."
       },
-      "pick_implementation": {
-        "title": "Choose the Google credentials"
+      "reauth_persons": {
+        "title": "Patient cards",
+        "description": "Signed in again. The cards already added are ticked: send the form as it is to keep them, or change the choice.",
+        "data": { "persons": "Cards" }
       },
+      "pick_implementation": { "title": "Choose the Google credentials" },
       "google_settings": {
         "title": "Google Calendar",
         "description": "Every booked visit of every account becomes an event in this calendar, titled like «[Іван] Масаж спини». The people below are invited to each one without an email, so it shows in their calendars too.",
@@ -57,12 +65,14 @@
       "invalid_password": "Wrong password.",
       "invalid_email": "One of the addresses is not an email address.",
       "cannot_connect": "Could not reach fajna.clinic.",
-      "unknown": "Unexpected answer from fajna.clinic. The site may have changed."
+      "unknown": "Unexpected answer from fajna.clinic. The site may have changed.",
+      "no_persons_chosen": "Tick at least one card."
     },
     "abort": {
       "already_configured": "This is already added.",
       "reauth_successful": "Signed in again.",
       "unsupported_login": "The clinic's login has changed and this version cannot complete it.",
+      "no_persons": "The account has no patient cards.",
       "google_already_configured": "Google Calendar is already connected. Change its calendar or invitees in its options.",
       "wrong_google_account": "That is a different Google account from the one linked.",
       "missing_credentials": "Add Google credentials first: Settings → Application credentials.",
@@ -76,9 +86,7 @@
       "no_url_available": "Home Assistant has no URL Google could return to. Check Settings → Network.",
       "user_rejected_authorize": "Access to Google was not granted."
     },
-    "create_entry": {
-      "default": "Connected."
-    }
+    "create_entry": { "default": "Connected." }
   },
   "options": {
     "step": {
@@ -92,10 +100,22 @@
           "calendar_id": "«primary» is the main calendar of the linked account.",
           "attendees": "Email addresses, separated by commas."
         }
+      },
+      "persons": {
+        "title": "Patient cards",
+        "description": "Tick the patient cards to keep in Home Assistant. A card you untick is removed with its entities and its events in Google Calendar.",
+        "data": { "persons": "Cards" }
       }
     },
     "error": {
-      "invalid_email": "One of the addresses is not an email address."
+      "invalid_email": "One of the addresses is not an email address.",
+      "no_persons_chosen": "Tick at least one card."
+    },
+    "abort": {
+      "account_not_loaded": "The account is not working right now (signed out or unreachable). Sign in again first.",
+      "no_persons": "The account has no patient cards.",
+      "cannot_connect": "Could not reach fajna.clinic.",
+      "unknown": "Unexpected answer from fajna.clinic. The site may have changed."
     }
   },
   "entity": {

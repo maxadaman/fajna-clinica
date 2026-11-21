@@ -89,6 +89,15 @@ def test_login_form_names_its_step(page: str, field: str) -> None:
     assert form.hidden == (("$ACTION_ID_40d472daa329f068eb938768ab6da07fbab6bb56fe", ""),)
 
 
+def test_the_card_step_offers_every_card() -> None:
+    form = parse_login_form(fixture("login_cards.html"))
+
+    assert form.field == "name"
+    assert form.choices == ("Тестенко Іван Петрович", "Тестенко Марія Іванівна")
+    assert form.hidden == (("$ACTION_ID_40d472daa329f068eb938768ab6da07fbab6bb56fe", ""),)
+    assert not is_login_page(fixture("login_cards.html"))
+
+
 def test_logout_form_is_not_a_login_step() -> None:
     with pytest.raises(ParseError):
         parse_login_form(fixture("account.html"))

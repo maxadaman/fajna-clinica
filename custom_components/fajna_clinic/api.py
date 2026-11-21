@@ -1,7 +1,8 @@
 """HTTP client for the Fajna Clinic patient account. No Home Assistant imports.
 
 The site has no API. Login is a Next.js Server Action posted once per step
-(phone -> SMS code -> password), and the session is one cookie, `accountQuery`.
+(phone -> SMS code -> password, then which card to open when the account has several),
+and the session is one cookie, `accountQuery`.
 The client keeps that cookie itself rather than in a cookie jar, so two accounts on
 one session can never mix: the session it is given must not store cookies.
 """
@@ -9,6 +10,7 @@ one session can never mix: the session it is given must not store cookies.
 from __future__ import annotations
 
 import base64
+from collections.abc import Collection
 import json
 import logging
 from typing import Any
@@ -153,6 +155,11 @@ class FajnaClient:
         next_field = self._read_form(html)
         if next_field == step:
             raise LoginRejected(step)
+        assert self._form is not None
+        if self._form.choices:
+            # Several cards: the site asks which one to open, as the last step. Any will do:
+            # the session is the account's, and every card is then read by its name.
+            return await self.submit(self._form.choices[0])
         return next_field
 
     def _read_form(self, html: str) -> str:
@@ -174,12 +181,24 @@ class FajnaClient:
             raise UnexpectedPage(f"{ACCOUNT_PATH} answered {status}")
         return html
 
-    async def fetch_account(self) -> AccountData:
-        """Every patient card of the account, with its visits."""
+    async def list_persons(self) -> list[str]:
+        """The names on the account's patient cards, as the account lists them."""
+        try:
+            return parse_persons(await self._page())
+        except ParseError as err:
+            raise UnexpectedPage(str(err)) from err
+
+    async def fetch_account(self, persons: Collection[str] | None = None) -> AccountData:
+        """The patient cards of the account, with their visits: all, or those in `persons`.
+
+        A chosen card the account no longer lists is left out, not an error.
+        """
         data = AccountData()
         try:
             names = parse_persons(await self._page())
             for name in names:
+                if persons is not None and name not in persons:
+                    continue
                 html = await self._page({"person": name})
                 data.persons[name] = parse_person(name, html)
         except ParseError as err:

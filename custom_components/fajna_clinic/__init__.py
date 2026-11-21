@@ -11,6 +11,7 @@ import aiohttp
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 from homeassistant.helpers.config_entry_oauth2_flow import (
     OAuth2Session,
@@ -22,6 +23,7 @@ from .const import (
     CONF_ATTENDEES,
     CONF_CALENDAR_ID,
     CONF_KIND,
+    CONF_PERSONS,
     CONF_TOKEN,
     DEFAULT_CALENDAR_ID,
     DOMAIN,
@@ -57,8 +59,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = FajnaCoordinator(hass, entry, create_client(hass, entry.data[CONF_TOKEN]))
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
+    _remove_unchosen_devices(hass, entry)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
+
+
+def _remove_unchosen_devices(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """A card taken out of the choice takes its device, and so its entities, with it."""
+    persons = entry.options.get(CONF_PERSONS)
+    if persons is None:
+        return
+    kept = {(DOMAIN, f"{entry.unique_id}_{person}") for person in persons}
+    registry = dr.async_get(hass)
+    for device in dr.async_entries_for_config_entry(registry, entry.entry_id):
+        if not device.identifiers & kept:
+            registry.async_update_device(device.id, remove_config_entry_id=entry.entry_id)
 
 
 async def _async_setup_google(hass: HomeAssistant, entry: GoogleConfigEntry) -> bool:

@@ -120,6 +120,31 @@ async def test_login_walks_the_three_steps_and_keeps_the_session() -> None:
     ]
 
 
+async def test_an_account_of_several_cards_opens_the_first_to_finish_the_login() -> None:
+    token = make_token(name="Тестенко Іван Петрович")
+    session = FakeSession(
+        [
+            Reply(text=fixture("login_password.html")),
+            # Several cards: the password leads to the card step, not to the account.
+            Reply(303, location="/account/login", cookie="state-3"),
+            Reply(text=fixture("login_cards.html")),
+            Reply(303, location="/account?person=x", cookie=token),
+        ]
+    )
+    client = FajnaClient(session)
+    assert await client.start_login() == "password"
+
+    assert await client.submit("secret") is None
+    assert client.token == token
+
+    posts = [s for s in session.sent if s.method == "POST"]
+    assert [form_fields(p.body) for p in posts] == [
+        {ACTION: "", "password": "secret"},
+        {ACTION: "", "name": "Тестенко Іван Петрович"},
+    ]
+    assert posts[1].cookies == {"accountQuery": "state-3"}
+
+
 async def test_a_step_answered_with_itself_is_a_rejection() -> None:
     session = FakeSession(
         [
@@ -164,6 +189,26 @@ async def test_account_reads_every_card() -> None:
         {"person": "Тестенко Марія Іванівна"},
     ]
     assert all(s.cookies == {"accountQuery": "t"} for s in session.sent)
+
+
+async def test_account_reads_only_the_chosen_cards() -> None:
+    session = FakeSession([Reply(text=fixture("account.html")), Reply(text=fixture("person.html"))])
+    client = FajnaClient(session, token="t")
+
+    # A chosen card the account no longer lists is skipped, not an error.
+    data = await client.fetch_account(["Тестенко Марія Іванівна", "Тестенко Олена"])
+
+    assert list(data.persons) == ["Тестенко Марія Іванівна"]
+    assert [s.params for s in session.sent] == [None, {"person": "Тестенко Марія Іванівна"}]
+
+
+async def test_the_cards_are_listed_from_one_page() -> None:
+    session = FakeSession([Reply(text=fixture("account.html"))])
+
+    names = await FajnaClient(session, token="t").list_persons()
+
+    assert names == ["Тестенко Іван Петрович", "Тестенко Марія Іванівна"]
+    assert len(session.sent) == 1
 
 
 @pytest.mark.parametrize(
