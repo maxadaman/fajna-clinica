@@ -25,6 +25,10 @@ UPDATE_INTERVAL = timedelta(minutes=30)
 
 CONF_PHONE = "phone"
 CONF_TOKEN = "token"
+# When the session was obtained (ISO, UTC): its lifetime is logged when it ends.
+CONF_TOKEN_AT = "token_at"
+# The account's password, stored only when the person turns automatic sign-in on.
+CONF_PASSWORD = "password"
 # The patient cards an account entry reads (an option). Absent: every card, as before.
 CONF_PERSONS = "persons"
 
@@ -55,3 +59,6 @@ EVENT_LOCATION = "Файна Клініка"
 FIELD_PHONE = "phone"
 FIELD_PIN = "pin"
 FIELD_PASSWORD = "password"
+
+SERVICE_SUBMIT_SMS = "submit_sms"
+ATTR_MESSAGE = "message"

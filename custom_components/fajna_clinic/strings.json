@@ -24,7 +24,7 @@
       },
       "password": {
         "title": "Password",
-        "description": "Enter the patient account password. It is sent to the clinic once and not stored.",
+        "description": "Enter the patient account password. It is sent to the clinic and not stored, unless you turn automatic sign-in on in the account's options.",
         "data": { "password": "Password" }
       },
       "persons": {
@@ -93,6 +93,24 @@
   },
   "options": {
     "step": {
+      "account": {
+        "title": "Account options",
+        "menu_options": {
+          "cards": "Patient cards",
+          "auto_relogin": "Automatic sign-in"
+        }
+      },
+      "auto_relogin": {
+        "title": "Automatic sign-in",
+        "description": "When the clinic ends the session, Home Assistant signs in again by itself: it asks the clinic for an SMS code and waits {minutes} minutes for the SMS to be passed to the `{service}` action (an iPhone Shortcuts automation can do it; see the README). Then it sends the code and this password. If no code comes, or the clinic refuses it, you are asked to sign in as before.\n\nThe password is kept in Home Assistant's storage, next to the session. Turn this off to forget it.",
+        "data": {
+          "auto_relogin": "Sign in again by itself",
+          "password": "Account password"
+        },
+        "data_description": {
+          "password": "Leave empty to keep the password already stored."
+        }
+      },
       "init": {
         "title": "Google Calendar",
         "description": "Visits of the ticked cards are written to this calendar. Untick a card to remove its events from here.",
@@ -114,6 +132,7 @@
       }
     },
     "error": {
+      "password_required": "Enter the account password.",
       "invalid_email": "One of the addresses is not an email address.",
       "no_persons_chosen": "Tick at least one card."
     },
@@ -122,6 +141,18 @@
       "no_persons": "The account has no patient cards.",
       "cannot_connect": "Could not reach fajna.clinic.",
       "unknown": "Unexpected answer from fajna.clinic. The site may have changed."
+    }
+  },
+  "services": {
+    "submit_sms": {
+      "name": "Submit SMS from the clinic",
+      "description": "Passes the clinic's SMS to an account that is signing in again by itself. The code is read from the text. Ignored when no account is waiting for one.",
+      "fields": {
+        "message": {
+          "name": "Message",
+          "description": "The SMS text as received."
+        }
+      }
     }
   },
   "entity": {

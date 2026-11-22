@@ -8,10 +8,12 @@ account).
 from __future__ import annotations
 
 import aiohttp
+import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 from homeassistant.helpers.config_entry_oauth2_flow import (
@@ -21,6 +23,7 @@ from homeassistant.helpers.config_entry_oauth2_flow import (
 
 from .api import FajnaClient
 from .const import (
+    ATTR_MESSAGE,
     CONF_ATTENDEES,
     CONF_CALENDAR_ID,
     CONF_CARDS,
@@ -31,11 +34,17 @@ from .const import (
     DOMAIN,
     KIND_ACCOUNT,
     KIND_GOOGLE,
+    SERVICE_SUBMIT_SMS,
 )
 from .coordinator import FajnaConfigEntry, FajnaCoordinator
 from .google_calendar import GoogleCalendarApi, GoogleCalendarSync
+from .relogin import async_deliver_sms, async_remove_relogin
 
 PLATFORMS: list[Platform] = [Platform.CALENDAR, Platform.SENSOR]
+
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+_SUBMIT_SMS_SCHEMA = vol.Schema({vol.Required(ATTR_MESSAGE): cv.string})
 
 type GoogleConfigEntry = ConfigEntry[GoogleCalendarSync]
 
@@ -53,6 +62,16 @@ def create_client(hass: HomeAssistant, token: str | None = None) -> FajnaClient:
     """
     session = async_create_clientsession(hass, cookie_jar=aiohttp.DummyCookieJar())
     return FajnaClient(session, token)
+
+
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    """The service an SMS from the clinic is passed to, for signing in by itself."""
+
+    async def submit_sms(call: ServiceCall) -> None:
+        async_deliver_sms(hass, call.data[ATTR_MESSAGE])
+
+    hass.services.async_register(DOMAIN, SERVICE_SUBMIT_SMS, submit_sms, _SUBMIT_SMS_SCHEMA)
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -101,3 +120,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: FajnaConfigEntry) -> bo
     if entry_kind(entry) == KIND_GOOGLE:
         return True
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    async_remove_relogin(hass, entry.entry_id)
