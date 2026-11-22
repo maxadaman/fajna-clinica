@@ -11,14 +11,17 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from homeassistant.config_entries import SOURCE_USER
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.util import dt as dt_util
 
 from custom_components.fajna_clinic.api import CannotConnect, LoginRejected, UnexpectedPage
 from custom_components.fajna_clinic.config_flow import normalize_phone
 from custom_components.fajna_clinic.const import (
     CONF_KIND,
+    CONF_PASSWORD,
     CONF_PERSONS,
     CONF_PHONE,
     CONF_TOKEN,
+    CONF_TOKEN_AT,
     DOMAIN,
     KIND_ACCOUNT,
 )
@@ -87,8 +90,10 @@ async def test_full_login_creates_the_entry(hass: HomeAssistant, client: MagicMo
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["title"] == "Тестенко Іван Петрович"
-    # The password is not kept: only the phone and the session.
-    assert result["data"] == {CONF_KIND: KIND_ACCOUNT, CONF_PHONE: PHONE, CONF_TOKEN: TOKEN}
+    # The password is not kept: only the phone and the session, with when it was obtained.
+    data = dict(result["data"])
+    assert dt_util.parse_datetime(data.pop(CONF_TOKEN_AT)) is not None
+    assert data == {CONF_KIND: KIND_ACCOUNT, CONF_PHONE: PHONE, CONF_TOKEN: TOKEN}
     # One card: nothing to choose, it is added.
     assert result["options"] == {CONF_PERSONS: [IVAN]}
     assert result["result"].unique_id == PHONE
@@ -168,7 +173,11 @@ async def test_reauth_replaces_the_session(hass: HomeAssistant, client: MagicMoc
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "reauth_successful"
-    assert entry.data == {CONF_PHONE: PHONE, CONF_TOKEN: TOKEN}
+    assert {k: v for k, v in entry.data.items() if k != CONF_TOKEN_AT} == {
+        CONF_PHONE: PHONE,
+        CONF_TOKEN: TOKEN,
+    }
+    assert CONF_TOKEN_AT in entry.data
     assert client.submit.await_args_list[0].args == (PHONE,)
 
 
@@ -304,6 +313,10 @@ async def test_options_change_the_cards(hass: HomeAssistant) -> None:
         await hass.async_block_till_done()
 
         result = await hass.config_entries.options.async_init(entry.entry_id)
+        assert result["type"] is FlowResultType.MENU
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], {"next_step_id": "cards"}
+        )
         assert result["step_id"] == "persons"
         assert _ticked(result) == [IVAN]
         result = await hass.config_entries.options.async_configure(
@@ -322,6 +335,44 @@ async def test_options_need_a_working_account(hass: HomeAssistant) -> None:
     entry.add_to_hass(hass)
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "cards"}
+    )
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "account_not_loaded"
+
+
+async def test_options_turn_automatic_sign_in_on_and_off(hass: HomeAssistant) -> None:
+    # Not loaded: the password can be given even while the session is dead.
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=PHONE,
+        data={CONF_KIND: KIND_ACCOUNT, CONF_PHONE: PHONE, CONF_TOKEN: "t"},
+        options={CONF_PERSONS: [IVAN]},
+    )
+    entry.add_to_hass(hass)
+
+    async def submit(values: dict) -> dict:
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], {"next_step_id": "auto_relogin"}
+        )
+        assert result["step_id"] == "auto_relogin"
+        return await hass.config_entries.options.async_configure(result["flow_id"], values)
+
+    result = await submit({"auto_relogin": True})
+    assert result["errors"] == {CONF_PASSWORD: "password_required"}
+
+    result = await submit({"auto_relogin": True, CONF_PASSWORD: " secret "})
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.data[CONF_PASSWORD] == "secret"
+    assert entry.options == {CONF_PERSONS: [IVAN]}
+
+    # Left empty, the stored password stays.
+    await submit({"auto_relogin": True})
+    assert entry.data[CONF_PASSWORD] == "secret"
+
+    await submit({"auto_relogin": False, CONF_PASSWORD: "ignored"})
+    assert CONF_PASSWORD not in entry.data
+    assert entry.data[CONF_TOKEN] == "t"

@@ -1,0 +1,8 @@
+submit_sms:
+  fields:
+    message:
+      required: true
+      example: "Ваш код для входу: 123456"
+      selector:
+        text:
+          multiline: true

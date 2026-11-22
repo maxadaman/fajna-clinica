@@ -16,18 +16,50 @@ HACS → ⋮ → Custom repositories → this repository, category *Integration*
 
 Settings → Devices & services → Add integration → **Fajna Clinic**, then the site's own
 steps: phone number, the code the clinic texts, the account password. The password is sent
-to the clinic once and is not stored; what is kept is the session cookie.
+to the clinic and is not stored (unless you turn on [signing in by itself](#signing-in-again-by-itself));
+what is kept is the session cookie.
 
 One phone can hold several patient cards (a family's). Once signed in, you tick which of
 them to add; an account with one card skips the question. Every chosen card becomes a device
-of its own. The account's **Configure** button changes the choice later: an unticked card is
+of its own. The account's **Configure → Patient cards** changes the choice later: an unticked card is
 removed with its entities and its Google Calendar events.
 
 Add the integration again for another account.
 
-When the clinic ends the session, Home Assistant shows a *re-authentication* notice: signing
-in again needs a fresh SMS code, so it cannot happen without you. Afterwards the card choice
-comes up again with the cards already added ticked: send it as it is to keep them.
+When the clinic ends the session (it does so after about two days, however often the
+account is read), Home Assistant shows a *re-authentication* notice: signing in again needs a
+fresh SMS code. Afterwards the card choice comes up again with the cards already added ticked:
+send it as it is to keep them.
+
+### Signing in again by itself
+
+Home Assistant can sign in again without you, if the clinic's SMS reaches it:
+
+1. The account's **Configure → Automatic sign-in**: turn it on and enter the account password.
+   It is kept in Home Assistant's storage (`.storage/core.config_entries`, next to the
+   session) and goes with its backups. Turning the option off forgets it.
+2. Pass the clinic's SMS to the `fajna_clinic.submit_sms` action. On an iPhone with the
+   [Home Assistant app](https://apps.apple.com/app/home-assistant/id1099568401): Shortcuts →
+   Automation → **New automation** → **Message** → *Message contains* a word the clinic's
+   SMS always has (e.g. the clinic's name) → **Run Immediately** → action **Perform Action**
+   (Home Assistant) → `fajna_clinic.submit_sms`, with `message` set to the message's
+   *Content* (*Shortcut Input*).
+
+When the session ends, the integration asks the clinic for a code, waits up to 5 minutes for
+the SMS, then sends the code and the password. The entities are unavailable meanwhile and the
+Google Calendars are left as they are. The code is the first group of 4–6 digits in the text;
+an SMS that comes while nothing is signing in is ignored.
+
+If no SMS comes in time, or the clinic refuses the code, the re-authentication notice comes
+as before. A refused password is forgotten, so it is not tried again. It does not try more
+than once an hour, and not again after a failure until a sign-in works: each try is an SMS.
+
+Try the automation once before relying on it: sign in on the clinic's site, and the log
+should say *An SMS code was passed on, but no account is signing in* — the SMS arrived. iOS
+may sort a code from an unknown sender away from your messages; if nothing reaches Home
+Assistant, add the sender to Contacts.
+
+The log (`custom_components.fajna_clinic`, level *info*) says how long each session lived.
 
 ## What you get, per patient
 

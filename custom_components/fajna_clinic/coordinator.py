@@ -12,9 +12,10 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from .api import AuthExpired, FajnaClient, FajnaError
-from .const import CONF_KIND, CONF_PERSONS, DOMAIN, KIND_GOOGLE, UPDATE_INTERVAL
+from .const import CONF_KIND, CONF_PERSONS, CONF_TOKEN_AT, DOMAIN, KIND_GOOGLE, UPDATE_INTERVAL
 from .google_calendar import GoogleCalendarSync, async_accept_invitations
 from .models import AccountData
+from .relogin import async_get_relogin
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -45,13 +46,33 @@ class FajnaCoordinator(DataUpdateCoordinator[AccountData]):
         try:
             data = await self.client.fetch_account(self.persons)
         except AuthExpired as err:
+            self._log_lifetime()
+            relogin = async_get_relogin(self.hass, self.config_entry)
+            if relogin.running:
+                raise UpdateFailed("the session has ended; signing in again") from err
+            if relogin.can_start():
+                # The SMS code is minutes away: the sign-in runs apart from this refresh.
+                relogin.start()
+                raise UpdateFailed("the session has ended; signing in again") from err
             # Signing in again needs an SMS code, so it is the person's step: HA asks them.
             raise ConfigEntryAuthFailed(str(err)) from err
         except FajnaError as err:
             raise UpdateFailed(str(err)) from err
+        async_get_relogin(self.hass, self.config_entry).session_works()
         # Only a successful read reaches Google: a failed one would read as «no visits».
         await self._async_push_to_google(data)
         return data
+
+    def _log_lifetime(self) -> None:
+        """How long the session lived, for knowing how long the clinic keeps one."""
+        obtained = dt_util.parse_datetime(self.config_entry.data.get(CONF_TOKEN_AT, ""))
+        if obtained is None:
+            return
+        _LOGGER.info(
+            "The session of %s ended; it was obtained %s ago",
+            self.config_entry.title,
+            dt_util.utcnow() - obtained,
+        )
 
     def _google(self) -> list[GoogleCalendarSync]:
         return [

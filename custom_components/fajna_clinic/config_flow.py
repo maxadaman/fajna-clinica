@@ -1,9 +1,10 @@
 """Adding to the integration: a clinic account, or the Google Calendar visits go to.
 
 **An account** signs in the way the site's own form does, step by step — phone, SMS code,
-password. The password is posted to the site once and never stored. What is kept is the
+password. The password is posted to the site and not stored. What is kept is the
 session cookie, and when the site ends that session HA asks for the steps again (reauth):
-signing in needs a fresh SMS code, so it cannot happen without the person.
+signing in needs a fresh SMS code. The account's options can store the password so that
+it signs in by itself, with the SMS passed on to HA (see `relogin.py`).
 
 One phone can hold several patient cards (a family's). Once signed in, the person picks
 which of them to add; signing in again shows the same choice, already ticked, and the
@@ -36,6 +37,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.config_entry_oauth2_flow import AbstractOAuth2FlowHandler
 from homeassistant.helpers.selector import (
+    BooleanSelector,
     SelectOptionDict,
     SelectSelector,
     SelectSelectorConfig,
@@ -44,6 +46,7 @@ from homeassistant.helpers.selector import (
     TextSelectorConfig,
     TextSelectorType,
 )
+from homeassistant.util import dt as dt_util
 
 from . import create_client, entry_kind
 from .api import (
@@ -59,9 +62,11 @@ from .const import (
     CONF_CALENDAR_ID,
     CONF_CARDS,
     CONF_KIND,
+    CONF_PASSWORD,
     CONF_PERSONS,
     CONF_PHONE,
     CONF_TOKEN,
+    CONF_TOKEN_AT,
     DEFAULT_CALENDAR_ID,
     DOMAIN,
     FIELD_PASSWORD,
@@ -73,6 +78,7 @@ from .const import (
     KIND_GOOGLE,
 )
 from .google_calendar import person_key
+from .relogin import SMS_TIMEOUT
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -83,6 +89,7 @@ _PIN_SCHEMA = vol.Schema({vol.Required(FIELD_PIN): str})
 _PASSWORD_SCHEMA = vol.Schema(
     {vol.Required(FIELD_PASSWORD): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))}
 )
+CONF_AUTO_RELOGIN = "auto_relogin"
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
@@ -371,11 +378,12 @@ class FajnaConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
         """The entry, with the session and the chosen cards (None: leave them as they are)."""
         assert self._client is not None and self._client.token and self._phone
         token = self._client.token
+        token_at = dt_util.utcnow().isoformat()
         if self.source == SOURCE_REAUTH:
             entry = self._get_reauth_entry()
             options = entry.options if persons is None else {**entry.options, CONF_PERSONS: persons}
             return self.async_update_reload_and_abort(
-                entry, data_updates={CONF_TOKEN: token}, options=options
+                entry, data_updates={CONF_TOKEN: token, CONF_TOKEN_AT: token_at}, options=options
             )
         try:
             title = decode_token(token).get("name") or self._phone
@@ -383,7 +391,12 @@ class FajnaConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
             title = self._phone
         return self.async_create_entry(
             title=str(title),
-            data={CONF_KIND: KIND_ACCOUNT, CONF_PHONE: self._phone, CONF_TOKEN: token},
+            data={
+                CONF_KIND: KIND_ACCOUNT,
+                CONF_PHONE: self._phone,
+                CONF_TOKEN: token,
+                CONF_TOKEN_AT: token_at,
+            },
             options={CONF_PERSONS: persons},
         )
 
@@ -475,12 +488,58 @@ class GoogleOptionsFlow(OptionsFlowWithReload):
 
 
 class AccountOptionsFlow(OptionsFlowWithReload):
-    """Which of the account's cards are in Home Assistant, without signing in again."""
+    """Which of the account's cards are in Home Assistant, and whether it signs in by itself."""
 
     def __init__(self) -> None:
         self._persons: list[str] = []
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        # Not «init»: that step's texts are the Google link's options.
+        return await self.async_step_account()
+
+    async def async_step_account(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        return self.async_show_menu(step_id="account", menu_options=["cards", "auto_relogin"])
+
+    async def async_step_auto_relogin(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """The password kept for signing in by itself, or forgotten. Not checked here:
+        checking means signing in, and that means an SMS code."""
+        entry = self.config_entry
+        stored = entry.data.get(CONF_PASSWORD)
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            data = {k: v for k, v in entry.data.items() if k != CONF_PASSWORD}
+            if user_input[CONF_AUTO_RELOGIN]:
+                # Left empty, the field keeps the password already stored.
+                password = user_input.get(CONF_PASSWORD, "").strip() or stored
+                if password:
+                    data[CONF_PASSWORD] = password
+                else:
+                    errors[CONF_PASSWORD] = "password_required"
+            if not errors:
+                self.hass.config_entries.async_update_entry(entry, data=data)
+                return self.async_create_entry(data=dict(entry.options))
+        return self.async_show_form(
+            step_id="auto_relogin",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_AUTO_RELOGIN, default=bool(stored)): BooleanSelector(),
+                    vol.Optional(CONF_PASSWORD): TextSelector(
+                        TextSelectorConfig(type=TextSelectorType.PASSWORD)
+                    ),
+                }
+            ),
+            description_placeholders={
+                "service": f"{DOMAIN}.submit_sms",
+                "minutes": str(int(SMS_TIMEOUT.total_seconds() // 60)),
+            },
+            errors=errors,
+        )
+
+    async def async_step_cards(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """The cards the account lists now, read through the entry's own session."""
         entry = self.config_entry
         if entry.state is not ConfigEntryState.LOADED:
